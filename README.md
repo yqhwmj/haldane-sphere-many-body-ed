@@ -69,3 +69,12 @@ machine-specific or large.
 - [ ] Add small reproducible examples and automated tests.
 - [ ] Pin verified dependency versions.
 - [ ] Add benchmark results and physics validation documentation.
+
+## Citation
+
+If this repository supports a publication, citation information will be added after the
+corresponding work is publicly available.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
