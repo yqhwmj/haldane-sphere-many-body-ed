@@ -69,9 +69,3 @@ machine-specific or large.
 - [ ] Add small reproducible examples and automated tests.
 - [ ] Pin verified dependency versions.
 - [ ] Add benchmark results and physics validation documentation.
-## Citation
-If this repository supports a publication, citation information will be added after the 
-corresponding work is publicly available.
-## License
-No open-source license is granted in the initial research snapshot. A license will be selected 
-after confirming publication and collaboration requirements.
