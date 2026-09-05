@@ -1,0 +1,25 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+# Virtual environments
+.venv/
+venv/
+env/
+# IDE settings
+.idea/
+.vscode/
+# Generated numerical data
+*.pkl
+*.npz
+results/*
+!results/.gitkeep
+data/*
+!data/.gitkeep
+tmp_blocks_*/
+# Logs and temporary files
+*.log
+*.tmp
+# Operating-system files
+.DS_Store
+Thumbs.db
