@@ -12,6 +12,17 @@ from fractions import Fraction
 import os
 import traceback
 import shutil
+import os
+import shutil
+from pathlib import Path
+
+# ====== 路径配置（与脚本1完全一致：基于文件自身位置推算）======
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"        # 脚本1 生成的矩阵元
+RESULTS_DIR = PROJECT_ROOT / "results"  # 本脚本输出的能谱、哈密顿量
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 REAL = 1 # 修改相互作用强度
 G_basis_states = None
@@ -129,9 +140,8 @@ def _process_chunk_worker(chunk, interaction_scale=1.0, tmp_dir=None, drop_tol=1
         block = sp.csr_matrix((n_basis, n_basis))
 
     # 确保临时目录存在
-    if tmp_dir is None:
-        tmp_dir = os.getcwd()
-    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_dir = Path(tmp_dir) if tmp_dir else Path.cwd()
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # 生成唯一文件名并保存
     fname = f"block_{os.getpid()}_{time.time_ns()}.npz"
@@ -215,7 +225,7 @@ class ManyBodyHamiltonian:
     """多体哈密顿量构建器"""
     
     def __init__(self, n_particles, matrix_data_path, num_workers=None,
-        output_dir="results", custom_filename=None,
+        output_dir=None, custom_filename=None,
         nnz_sparse_threshold=500000):
         """
         初始化多体哈密顿量构建器
@@ -233,7 +243,8 @@ class ManyBodyHamiltonian:
         self.index_to_state = None
         self.single_particle_states = None
         self.single_particle_energies = None
-        self.output_dir = output_dir
+        self.output_dir = Path(output_dir) if output_dir else RESULTS_DIR
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.custom_filename = custom_filename
         self.nnz_sparse_threshold = nnz_sparse_threshold
 
@@ -317,8 +328,7 @@ class ManyBodyHamiltonian:
             filename += ".txt"
         
         # 组合完整路径
-        full_path = os.path.join(self.output_dir, filename)
-        return full_path
+        return self.output_dir / filename
 
     def calculate_single_particle_energies(self):
         """计算单粒子能级"""
@@ -398,8 +408,8 @@ class ManyBodyHamiltonian:
         n_basis = self.fock_space.get_basis_size()
         
         # 为本次构建创建临时目录
-        tmp_dir = os.path.join(self.output_dir if hasattr(self, "output_dir") else ".", f"tmp_blocks_{int(time.time())}")
-        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_dir = self.output_dir / f"tmp_blocks_{int(time.time())}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         
         # 取出预计算矩阵元
         matrix_items = list(self.V_matrix_dict.items())
@@ -766,11 +776,11 @@ class ManyBodyHamiltonian:
 
 def enhanced_example_usage():
     
-    n_particles = 4
-    matrix_data_path = 'V_matrix_q3_2_lmax1.5_k1.pkl'
-    num_workers = 20
+    n_particles = 2
+    matrix_data_path = DATA_DIR / "V_matrix_q1_lmax1_k1.pkl"
+    num_workers = min(os.cpu_count() or 1, 16)
     
-    output_directory = os.path.join("q=2,n=3，哈密顿量")   # 自定义保存目录
+    output_directory = RESULTS_DIR   # 自定义保存目录
     custom_filename = ""  # 自定义文件名前缀
 
     print("=" * 60)
