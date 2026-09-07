@@ -12,6 +12,18 @@ from fractions import Fraction
 from sympy import symbols, diff, lambdify
 from scipy.integrate import quad
 import os
+from pathlib import Path
+
+# 项目根目录 = src/ 的上一级
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 各个目录
+DATA_DIR = PROJECT_ROOT / "data"
+RESULTS_DIR = PROJECT_ROOT / "results"
+
+# 自动创建（不存在就建，存在就跳过）
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 warnings.filterwarnings('ignore')
 
@@ -208,8 +220,8 @@ def format_state(state):
 
 def main():
     # ==================== 参数设置 ====================
-    q = Fraction(7, 2)      # 磁单极强度
-    l_max = 3.5           # 最大角量子数
+    q = Fraction(2, 2)      # 磁单极强度
+    l_max = 1          # 最大角量子数
     k_2D = 1              # 二维相互作用强度
     threshold = 1e-10       # 矩阵元阈值：绝对值小于此值的矩阵元将被忽略
     
@@ -279,14 +291,10 @@ def main():
     valid_matrix_elements = len(V_matrix_dict)
     
     # ==================== 保存结果 ====================
-    fixed_output_dir = r"D:\文档\python"  # 文件保存路径
-    os.makedirs(fixed_output_dir, exist_ok=True)    # 确保目录存在
-
     q_str = str(q).replace('/', '_')
     output_filename = f"V_matrix_q{q_str}_lmax{l_max}_k{k_2D}.pkl"
-    output_path = os.path.join(fixed_output_dir, output_filename)
+    output_path = DATA_DIR / output_filename
 
-    
     with open(output_path, 'wb') as f:
         pickle.dump({
             'parameters': {
@@ -308,7 +316,7 @@ def main():
             }
         }, f)
 
-    print(f"结果已保存至固定路径：{output_path}")
+    print(f"矩阵元已保存至：{output_path}")
     # ==================== 输出总结 ====================
     end_time = time.time()
     elapsed_time = end_time - start_time
