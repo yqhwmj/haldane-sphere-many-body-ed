@@ -15,6 +15,18 @@ import shutil
 import os
 import shutil
 from pathlib import Path
+import os
+import shutil
+import sys
+import json
+from pathlib import Path
+import argparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runio import (
+    DATA_DIR, RESULTS_DIR,
+    resolve_run, choose_run_interactive,
+)
 
 # ====== 路径配置（与脚本1完全一致：基于文件自身位置推算）======
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -145,7 +157,7 @@ def _process_chunk_worker(chunk, interaction_scale=1.0, tmp_dir=None, drop_tol=1
 
     # 生成唯一文件名并保存
     fname = f"block_{os.getpid()}_{time.time_ns()}.npz"
-    path = os.path.join(tmp_dir, fname)
+    path = tmp_dir / fname
     sp.save_npz(path, block)
     return path
 
@@ -225,8 +237,8 @@ class ManyBodyHamiltonian:
     """多体哈密顿量构建器"""
     
     def __init__(self, n_particles, matrix_data_path, num_workers=None,
-        output_dir=None, custom_filename=None,
-        nnz_sparse_threshold=500000):
+             output_dir=None, custom_filename=None,
+             nnz_sparse_threshold=500000):
         """
         初始化多体哈密顿量构建器
         
@@ -774,38 +786,83 @@ class ManyBodyHamiltonian:
         print(f"分析总结已保存至: {filename}") 
         return filename 
 
-def enhanced_example_usage():
-    
-    n_particles = 2
-    matrix_data_path = DATA_DIR / "V_matrix_q1_lmax1_k1.pkl"
+def ask_particles_interactive(default=3):
+    """交互式询问粒子数，支持单个值或逗号分隔的批量值。"""
+    print("\n" + "=" * 60)
+    print("粒子数设置")
+    print("=" * 60)
+    print(f"  直接回车       = 使用默认 n = {default}")
+    print("  输入单个数字   = 只算一个粒子数，例如 4")
+    print("  输入逗号分隔   = 批量计算多个粒子数，例如 3,4,5,6")
+    print("=" * 60)
+
+    while True:
+        raw = input("请输入粒子数：").strip()
+        if raw == "":
+            return [default]
+        # 支持中文逗号
+        parts = [x.strip() for x in raw.replace("，", ",").split(",") if x.strip()]
+        if all(p.isdigit() and int(p) > 0 for p in parts):
+            return [int(p) for p in parts]
+        print("  无效输入，请输入正整数（如 4）或逗号分隔（如 3,4,5）")
+
+def enhanced_example_usage(run_dir, meta, n_particles=4):
+    """
+    run_dir : 本次 run 的目录（由 resolve_run 返回）
+    meta    : 该 run 的元数据（含 q / l_max / k_2D 等参数）
+    n_particles : 多体参数，与矩阵元无关，可自由指定
+    """
+
+
+    # ---------- ① 中间数据路径：run 目录内固定名，直接命中 ----------
+    matrix_data_path = run_dir / meta['matrix_file']
+
+    # ---------- ② 矩阵元参数：从元数据读取，不再手写声明 ----------
+    q     = meta['q']
+    q_str = meta['q_str']
+    l_max = meta['l_max']
+    k_2D  = meta['k_2D']
+
+    # ---------- ③ 进程数自动检测（上限 16）----------
     num_workers = min(os.cpu_count() or 1, 16)
-    
-    output_directory = RESULTS_DIR   # 自定义保存目录
+
+    # ---------- ④ 输出目录：由输入参数自动生成，多组参数不会互相覆盖 ----------
+    output_directory = RESULTS_DIR / f"q{q_str}_lmax{l_max}_k{k_2D}_n{n_particles}"
+    output_directory.mkdir(parents=True, exist_ok=True)
+
     custom_filename = ""  # 自定义文件名前缀
 
     print("=" * 60)
-    print("多体哈密顿量构建模块") 
+    print("多体哈密顿量构建模块")
     print("=" * 60)
-    
+    print(f"run_id     : {meta['run_id']}")
+    print(f"输入矩阵元 : {matrix_data_path}")
+    print(f"矩阵元参数 : q={q}, l_max={l_max}, k_2D={k_2D}, 态数={meta['num_states']}")
+    print(f"多体参数   : n_particles={n_particles}")
+    print(f"输出目录   : {output_directory}")
+    print("=" * 60)
+
     # 初始化多体哈密顿量构建器
-    mb_hamiltonian = ManyBodyHamiltonian(n_particles, matrix_data_path, num_workers,
-        output_dir=output_directory,
+    mb_hamiltonian = ManyBodyHamiltonian(
+        n_particles, str(matrix_data_path), num_workers,
+        output_dir=str(output_directory),
         custom_filename=custom_filename,
-        nnz_sparse_threshold=500000)
-    
+        nnz_sparse_threshold=500000
+    )
+
     # 显示Fock空间信息
     mb_hamiltonian.fock_space.print_basis_info(max_display=5)
-    
+
     # 构建完整哈密顿量
     H_full = mb_hamiltonian.build_full_hamiltonian()
-    
+
     # 对角化并获取本征值和本征向量
     eigenvalues, eigenvectors, unique_energies = mb_hamiltonian.diagonalize(
-        k=20, 
+        k=20,
         degeneracy_tolerance=0.001,  # 绝对容差
         relative_tolerance=0.001     # 相对容差
     )
-    
+
     # 保存所有数据（使用参数化文件名）
     hamiltonian_file = mb_hamiltonian.save_hamiltonian(suffix="full")
     eigen_file = mb_hamiltonian.save_eigen_data(eigenvalues, eigenvectors)
@@ -816,10 +873,8 @@ def enhanced_example_usage():
         "简并度": len([e for e in eigenvalues if abs(e - eigenvalues[0]) < 0.001]),
         "总态数": len(eigenvalues)
     }
-    
+
     summary_file = mb_hamiltonian.save_analysis_summary(analysis_results)
-
-
 
     # 详细输出本征值信息
     print(f"\n【本征值详细分析】")
@@ -831,45 +886,45 @@ def enhanced_example_usage():
     ground_energy = unique_energies[0]
     first_excited_energy = unique_energies[1] if len(unique_energies) > 1 else ground_energy
     gap = first_excited_energy - ground_energy
-    
+
     print(f"\n【基态能量分析】")
     print("-" * 40)
     print(f"基态能量: {ground_energy:.8f}")
     print(f"第一激发态能量: {first_excited_energy:.8f}")
     print(f"能隙: {gap:.8f}")
-    
+
     # ========== 简并基态分析 ==========
     print(f"\n【简并基态占有数分析】")
     print("-" * 40)
-    
+
     # 1. 找出所有简并基态
     ground_energy = eigenvalues[0]
     degenerate_indices = [0]  # 基态总是包含在内
     degeneracy_tolerance = 1e-12
-    
+
     for i in range(1, len(eigenvalues)):
         energy_diff = abs(eigenvalues[i] - ground_energy)
         if energy_diff <= degeneracy_tolerance:
             degenerate_indices.append(i)
         else:
             break  # 遇到第一个非简并态就停止
-    
+
     print(f"发现 {len(degenerate_indices)} 个简并基态")
     print(f"简并基态索引: {degenerate_indices}")
-    
+
     # 2. 计算平均占有数分布
     n_orbitals = mb_hamiltonian.fock_space.n_orbitals     #确定单粒子轨道的总数
     avg_occupation = np.zeros(n_orbitals)                 #创建全零数组，用于累加各态的占有数
     individual_occupations = []                           #存储每个简并态的独立占有数分布
-    
+
     for idx in degenerate_indices:
         state_vector = eigenvectors[:, idx]
         occupation = mb_hamiltonian.compute_orbital_occupations(state_vector)
         individual_occupations.append(occupation)
         avg_occupation += occupation
-    
+
     avg_occupation /= len(degenerate_indices)
-    
+
     # 3. 输出结果
     print(f"简并基态平均占有数分布 ({len(degenerate_indices)}个态平均):")
     significant_count = 0
@@ -878,16 +933,16 @@ def enhanced_example_usage():
             l, m = mb_hamiltonian.single_particle_states[orb_idx]
             print(f"  轨道{orb_idx} (l={l}, m={m}): {occ:.4f}")
             significant_count += 1
-    
+
     if significant_count == 0:
         print("  (无显著占据轨道)")
-    
+
     # ========== 多态分析部分 ==========
     print(f"\n【多低能态占有数分析 】")
     print("=" * 70)
-    
+
     num_states_to_analyze = 1
-    
+
     # 分析每个低能态
     for state_idx in range(num_states_to_analyze):
         print(f"\n{'#'*60}")
@@ -898,37 +953,79 @@ def enhanced_example_usage():
             energy_gap = eigenvalues[state_idx] - eigenvalues[0]
             print(f"【第{state_idx}激发态】能隙: {energy_gap:.6f}")
         print(f"{'#'*60}")
-        
+
         # 获取该态的波函数
         state_vector = eigenvectors[:, state_idx]
-        
+
         # 分析该态的占有数分布
         occupation_distribution = mb_hamiltonian.compute_orbital_occupations(state_vector)
-        
+
         print(f"单粒子轨道期望占有数分布:")
         significant_count = 0
-        for orb_idx, occ in enumerate(occupation_distribution): 
+        for orb_idx, occ in enumerate(occupation_distribution):
             if occ > 0.001:  # 只显示显著占据的轨道
                 l, m = mb_hamiltonian.single_particle_states[orb_idx]
                 print(f"  轨道{orb_idx} (l={l}, m={m}): {occ:.4f}")
                 significant_count += 1
-        
+
         if significant_count == 0:
             print("  (无显著占据轨道)")
-         
+
         # 分析该态的主要Fock成分
         dominant_states = mb_hamiltonian.identify_dominant_fock_states(
             state_vector, top_k=3
         )
-        
+
         # 计算参与率
         participation_ratio = mb_hamiltonian._compute_participation_ratio(state_vector)
         print(f"参与率: {participation_ratio:.2f} ")            #度量态复杂性
-     
-  
-     
+
     print("\n完整分析完成!")
+    return mb_hamiltonian
 
 if __name__ == "__main__":
-    mp.freeze_support()
-    enhanced_example_usage()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="多体哈密顿量构建")
+    parser.add_argument("run_id", nargs="?", default=None,
+                        help="run_id；省略则弹出交互式菜单选择")
+    parser.add_argument("-n", "--n-particles", type=int, default=None,
+                        help="粒子数；省略则交互式询问")
+    parser.add_argument("--batch", default=None,
+                        help="批量粒子数，逗号分隔，如 3,4,5")
+    args = parser.parse_args()
+
+    # ===== ① 确定粒子数：命令行优先，否则交互式询问 =====
+    if args.batch:
+        ns = [int(x) for x in args.batch.replace("，", ",").split(",") if x.strip()]
+    elif args.n_particles is not None:
+        ns = [args.n_particles]
+    else:
+        ns = ask_particles_interactive(default=3)      # ← 弹出输入对话
+
+    # ===== ② 选择 run（只选一次，所有 n 复用同一组矩阵元）=====
+    run_id = args.run_id
+    if run_id is None:
+        run_id = choose_run_interactive()
+    run_dir, meta = resolve_run(run_id)
+
+    # ===== ③ 逐个计算 =====
+    if len(ns) > 1:
+        print(f"\n批量计算粒子数：{ns}")
+        print(f"使用 run：{meta['run_id']}  "
+              f"(q={meta['q_str']}, l_max={meta['l_max']}, k={meta['k_2D']})")
+
+    for idx, n in enumerate(ns, 1):
+        if len(ns) > 1:
+            print("\n" + "=" * 70)
+            print(f"[{idx}/{len(ns)}] 开始计算 n_particles = {n}")
+            print("=" * 70)
+        try:
+            enhanced_example_usage(run_dir, meta, n_particles=n)
+            if len(ns) > 1:
+                print(f"✓ n={n} 完成")
+        except Exception as e:
+            print(f"✗ n={n} 失败：{type(e).__name__}: {e}")
+            if len(ns) > 1:
+                continue
+            raise

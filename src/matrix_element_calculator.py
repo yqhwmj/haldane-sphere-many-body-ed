@@ -13,6 +13,11 @@ from sympy import symbols, diff, lambdify
 from scipy.integrate import quad
 import os
 from pathlib import Path
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 保证能导入同目录 runio
+from runio import save_matrix_elements
+
 
 # 项目根目录 = src/ 的上一级
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -89,7 +94,7 @@ def compute_analytical_V(q, l1, m1, l2, m2, l3, m3, l4, m4, k_2D):
     derivative_product = 1
     for l_i, n_i in zip([l1, l2, l3, l4], [n1, n2, n3, n4]):
         base_expr = (1 - x)**(l_i - q) * (1 + x)**(l_i + q)
-        deriv_expr = diff(base_expr, x, n_i)
+        deriv_expr = diff(base_expr, x, int(round(n_i)))
         derivative_product *= deriv_expr
     
     # 乘以权重因子 (1-x)^{2q+m_t} (1+x)^{-2q+m_t}
@@ -135,8 +140,8 @@ class StateIndexMapper:
     """
     def __init__(self, q, l_max):
         self.q = q
-        self.l_max = l_max
-        self.l_min = abs(q)
+        self.l_max = float(l_max)    
+        self.l_min = float(abs(q)) 
         self._total_states = self._calculate_total_states()
         self._valid_states = self._generate_valid_states()
         
@@ -218,20 +223,83 @@ def format_state(state):
     
     return f"({l_str}, {m_str})"
 
-def main():
+# ==================== 参数交互设置 ====================
+def parse_number(s):
+    """把 '3/2'、'1.5'、'2' 统一转成 Fraction（保持半整数精确）。"""
+    s = str(s).strip().replace('，', ',').replace(' ', '')
+    if '/' in s:
+        a, b = s.split('/')
+        return Fraction(int(a), int(b))
+    try:
+        return Fraction(s)                      # '3' 或 '1.5'
+    except Exception:
+        return Fraction(float(s)).limit_denominator(100)
+
+
+def _ask(prompt, default, cast, validate=None):
+    """带默认值和校验的单参数询问；直接回车返回默认值。"""
+    while True:
+        raw = input(f"  {prompt} [默认 {default}]：").strip()
+        if raw == "":
+            return default
+        try:
+            val = cast(raw)
+        except Exception:
+            print("    输入无效，请重新输入")
+            continue
+        if validate is None or validate(val):
+            return val
+        print("    取值不合法，请重新输入")
+
+
+def ask_parameters_interactive(defaults):
+    """交互式设置计算参数。"""
+    print("\n" + "=" * 62)
+    print("矩阵元计算参数设置")
+    print("=" * 62)
+    print("  · q / l_max 支持半整数，可输入 3/2 或 1.5")
+    print("  · threshold 支持科学计数法，如 1e-10")
+    print("  · 直接回车 = 使用默认值")
+    print("=" * 62)
+
+    cur = dict(defaults)
+    print("  当前参数：")
+    for k, v in cur.items():
+        print(f"    {k:<12} = {v}")
+    print("-" * 62)
+
+    if input("  全部使用默认值请直接回车，逐个修改请输入 y：").strip().lower() != "y":
+        return cur
+
+    while True:
+        q = _ask("磁单极强度 q", cur["q"], parse_number)
+        l_max = _ask("最大角量子数 l_max", cur["l_max"], parse_number)
+        if l_max < abs(q):
+            print(f"    错误：l_max 必须 ≥ |q| = {abs(q)}")
+            continue
+        if (l_max - abs(q)).denominator != 1:
+            print(f"    错误：l_max - |q| 必须是整数（当前为 {l_max - abs(q)}）")
+            continue
+        break
+
+    return {
+        "q": q,
+        "l_max": float(l_max),                  # 态映射内部按 float 处理
+        "k_2D": float(_ask("二维相互作用强度 k_2D", cur["k_2D"], parse_number)),
+        "threshold": _ask("矩阵元阈值 threshold", cur["threshold"], float),
+        "chunk_size": _ask("任务块大小 chunk_size", cur["chunk_size"],
+                           int, lambda v: v > 0),
+        "num_workers": _ask(
+            f"并行进程数 num_workers（本机 {os.cpu_count() or 1} 核）",
+            cur["num_workers"], int, lambda v: 0 < v <= 64),
+    }
+
+def main(q, l_max, k_2D, threshold, chunk_size, num_workers):
+
+    start_time = time.time()          # ← 加这一行，整个计算的起始时刻
+    comp_time = None                  # ← 加这一行，兜底防止后面也报未定义
     # ==================== 参数设置 ====================
-    q = Fraction(2, 2)      # 磁单极强度
-    l_max = 1          # 最大角量子数
-    k_2D = 1              # 二维相互作用强度
-    threshold = 1e-10       # 矩阵元阈值：绝对值小于此值的矩阵元将被忽略
-    
-    chunk_size = 100        # 并行计算任务块大小
-    num_workers = 40       # 并行工作进程数
-    
     print("开始计算磁单极谐函数相互作用矩阵元...")
-    print(f"参数设置: q={q}, l_max={l_max}, k_2D={k_2D}")
-    print(f"矩阵元阈值: {threshold} (绝对值小于此值的矩阵元将被忽略)")
-    start_time = time.time()
     
     # ==================== 初始化态映射系统 ====================
     mapper = StateIndexMapper(q, l_max)
@@ -290,33 +358,33 @@ def main():
     comp_time = time.time() - comp_start
     valid_matrix_elements = len(V_matrix_dict)
     
-    # ==================== 保存结果 ====================
-    q_str = str(q).replace('/', '_')
-    output_filename = f"V_matrix_q{q_str}_lmax{l_max}_k{k_2D}.pkl"
-    output_path = DATA_DIR / output_filename
+# ---------- 保存矩阵元（run 目录 + 元数据，脚本2 自动读取）----------
+    payload = {
+        'parameters': {
+            'q': float(q),
+            'l_max': l_max,
+            'k_2D': k_2D,
+            'threshold': threshold
+        },
+        'matrix_elements': V_matrix_dict,
+        'index_to_state': {i: valid_states[i] for i in range(num_states)},
+        'statistics': {
+            'total_combinations': total_combinations,
+            'momentum_conserved': valid_combinations,
+            'computed_elements': valid_matrix_elements,
+            'filtered_out': valid_combinations - valid_matrix_elements,
+            'filter_ratio': (valid_combinations - valid_matrix_elements) / valid_combinations if valid_combinations > 0 else 0,
+            'total_time': time.time() - start_time,
+            'computation_time': comp_time
+        }
+    }
 
-    with open(output_path, 'wb') as f:
-        pickle.dump({
-            'parameters': {
-                'q': float(q),
-                'l_max': l_max,
-                'k_2D': k_2D,
-                'threshold': threshold
-            },
-            'matrix_elements': V_matrix_dict,
-            'index_to_state': {i: valid_states[i] for i in range(num_states)},
-            'statistics': {
-                'total_combinations': total_combinations,
-                'momentum_conserved': valid_combinations,
-                'computed_elements': valid_matrix_elements,
-                'filtered_out': valid_combinations - valid_matrix_elements,
-                'filter_ratio': (valid_combinations - valid_matrix_elements) / valid_combinations if valid_combinations > 0 else 0,
-                'total_time': time.time() - start_time,
-                'computation_time': comp_time
-            }
-        }, f)
+    run_dir, meta = save_matrix_elements(
+        q, l_max, k_2D, threshold, payload, num_states
+    )
 
-    print(f"矩阵元已保存至：{output_path}")
+
+
     # ==================== 输出总结 ====================
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -330,8 +398,9 @@ def main():
     print(f"过滤比例: {(valid_combinations - valid_matrix_elements) / valid_combinations * 100:.2f}%")
     print(f"矩阵元计算时间: {comp_time:.2f}s")
     print(f"总运行时间: {elapsed_time:.2f}s")
-    print(f"\n结果已保存至: {output_filename}")
-    
+    print(f"矩阵元已保存至：{run_dir / meta['matrix_file']}")
+    print(f"run_id = {meta['run_id']}   （脚本2 可直接选用）")
+
     # 显示矩阵元详细列表
     if valid_matrix_elements > 0:
         print("\n矩阵元详细列表 (前5个有效矩阵元):")
@@ -361,4 +430,58 @@ def main():
         print("\n警告: 未找到任何有效矩阵元!")
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="磁单极谐函数相互作用矩阵元计算")
+    parser.add_argument("-q", default=None, help="磁单极强度，如 3/2 或 1.5")
+    parser.add_argument("-l", "--l-max", default=None, help="最大角量子数，如 3/2")
+    parser.add_argument("-k", "--k-2d", default=None, help="二维相互作用强度，如 1")
+    parser.add_argument("-t", "--threshold", default=None, help="矩阵元阈值，如 1e-10")
+    parser.add_argument("-c", "--chunk-size", type=int, default=None, help="任务块大小")
+    parser.add_argument("-w", "--workers", type=int, default=None, help="并行进程数")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="跳过交互，直接使用默认参数")
+    args = parser.parse_args()
+
+    # ① 默认值（进程数自动检测，上限 16，避免 40 进程拖垮机器）
+    params = {
+        "q": Fraction(2, 2),
+        "l_max": Fraction(2, 2),
+        "k_2D": Fraction(1),
+        "threshold": 1e-10,
+        "chunk_size": 100,
+        "num_workers": min(os.cpu_count() or 1, 16),
+    }
+
+    # ② 命令行覆盖
+    cli_given = False
+    if args.q is not None:
+        params["q"] = parse_number(args.q);            cli_given = True
+    if args.l_max is not None:
+        params["l_max"] = parse_number(args.l_max);    cli_given = True
+    if args.k_2d is not None:
+        params["k_2D"] = parse_number(args.k_2d);      cli_given = True
+    if args.threshold is not None:
+        params["threshold"] = float(args.threshold);   cli_given = True
+    if args.chunk_size is not None:
+        params["chunk_size"] = args.chunk_size;        cli_given = True
+    if args.workers is not None:
+        params["num_workers"] = args.workers;          cli_given = True
+
+    # ③ 既没命令行参数又没 -y → 交互式询问
+    if not cli_given and not args.yes:
+        params = ask_parameters_interactive(params)
+
+    # ④ 类型归一（q 保持 Fraction，l_max / k_2D 转 float）
+    if not isinstance(params["q"], Fraction):
+        params["q"] = parse_number(str(params["q"]))
+    params["l_max"] = float(params["l_max"])
+    params["k_2D"] = float(params["k_2D"])
+
+    # ⑤ 参数合法性校验
+    if params["l_max"] < abs(params["q"]):
+        raise ValueError(f"l_max 必须 ≥ |q| = {abs(params['q'])}")
+    if abs((params["l_max"] - float(abs(params["q"]))) % 1) > 1e-9:
+        raise ValueError("l_max - |q| 必须是整数（角动量按整数步长递增）")
+
+    main(**params)
