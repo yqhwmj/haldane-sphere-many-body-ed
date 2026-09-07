@@ -19,7 +19,7 @@ from pathlib import Path
 # ====== 路径配置（与脚本1完全一致：基于文件自身位置推算）======
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"        # 脚本1 生成的矩阵元
-RESULTS_DIR = PROJECT_ROOT / "results"  # 本脚本输出的能谱、哈密顿量
+RESULTS_DIR = PROJECT_ROOT / "results"  # 脚本输出的能谱、哈密顿量
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
